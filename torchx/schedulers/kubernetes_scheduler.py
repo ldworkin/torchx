@@ -46,10 +46,11 @@ import yaml
 from torchx.schedulers.api import (
     AppDryRunInfo,
     DescribeAppResponse,
-    Scheduler,
+    WorkspaceScheduler,
     Stream,
     filter_regex,
 )
+from torchx.schedulers.docker_scheduler import DockerScheduler
 from torchx.schedulers.ids import make_unique
 from torchx.specs.api import (
     AppDef,
@@ -303,7 +304,7 @@ class KubernetesJob:
         return str(self)
 
 
-class KubernetesScheduler(Scheduler):
+class KubernetesScheduler(WorkspaceScheduler):
     """
     KubernetesScheduler is a TorchX scheduling interface to Kubernetes.
 
@@ -523,6 +524,22 @@ class KubernetesScheduler(Scheduler):
             return filter_regex(regex, iterator)
         else:
             return iterator
+
+    def build_workspace_image(self, img: str, workspace: str) -> str:
+        """
+        build_workspace_image creates a new image with the files in workspace
+        overlaid on top of it.
+
+        docker must be installed and running on the local host.
+
+        Args:
+            img: a Docker image to use as a base
+            workspace: a fsspec path to a directory with contents to be overlaid
+
+        Returns:
+            The new Docker image ID.
+        """
+        return DockerScheduler(self.session_name).build_workspace_image(img, workspace)
 
 
 def create_scheduler(session_name: str, **kwargs: Any) -> KubernetesScheduler:

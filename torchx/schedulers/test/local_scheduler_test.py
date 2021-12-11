@@ -6,6 +6,7 @@
 # LICENSE file in the root directory of this source tree.
 
 import abc
+import gc
 import json
 import multiprocessing as mp
 import os
@@ -21,6 +22,7 @@ from typing import Callable, Generator, Optional
 from unittest import mock
 from unittest.mock import MagicMock, patch
 
+import fsspec
 from pyre_extensions import none_throws
 from torchx.schedulers.api import DescribeAppResponse
 from torchx.schedulers.local_scheduler import (
@@ -31,6 +33,8 @@ from torchx.schedulers.local_scheduler import (
     create_cwd_scheduler,
     join_PATH,
     make_unique,
+    _build_tempdir_from_workspace,
+    _WORKSPACE_IMAGES,
 )
 from torchx.specs.api import AppDef, AppState, Role, is_terminal, macros
 
@@ -873,6 +877,59 @@ class JoinPATHTest(unittest.TestCase):
         self.assertEqual(
             "/usr/bin:/bin:/usr/local/bin", join_PATH(path, "/usr/local/bin")
         )
+
+
+class LocalWorkspaceTest(unittest.TestCase):
+    def test_build_local_path(self) -> None:
+        with tempfile.TemporaryDirectory("torchx_local_scheduler_test") as path:
+            self.assertEqual(_build_tempdir_from_workspace(path), path)
+            self.assertEqual(_build_tempdir_from_workspace("file://" + path), path)
+
+    def test_build_memory(self) -> None:
+        fs = fsspec.filesystem("memory")
+        fs.touch("root.py")
+        fs.touch("foo/foo.py")
+        fs.touch("foo/bar/bar1.py")
+        fs.touch("foo/bar/bar2.py")
+        fs.mkdir("foo/empty")
+
+        self.assertEqual(len(_WORKSPACE_IMAGES), 0)
+        root = _build_tempdir_from_workspace("memory://foo")
+        self.assertTrue(os.path.exists(root))
+        self.assertTrue(os.path.isdir(root))
+        self.assertEqual(len(_WORKSPACE_IMAGES), 1)
+
+        all_files = set()
+        for dir, dirs, files in os.walk(root):
+            for d in dirs:
+                all_files.add(
+                    os.path.relpath(
+                        os.path.join(dir, d),
+                        root,
+                    )
+                    + "/"
+                )
+            for file in files:
+                all_files.add(
+                    os.path.relpath(
+                        os.path.join(dir, file),
+                        root,
+                    )
+                )
+        self.assertEqual(
+            all_files,
+            {
+                "foo.py",
+                "bar/",
+                "bar/bar1.py",
+                "bar/bar2.py",
+                "empty/",
+            },
+        )
+
+        _WORKSPACE_IMAGES.clear()
+        gc.collect()
+        self.assertFalse(os.path.exists(root))
 
 
 @contextmanager

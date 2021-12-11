@@ -15,6 +15,7 @@ import io
 import json
 import logging
 import os
+import posixpath
 import pprint
 import re
 import shutil
@@ -41,8 +42,14 @@ from typing import (
     TextIO,
 )
 
+import fsspec
 from pyre_extensions import none_throws
-from torchx.schedulers.api import AppDryRunInfo, DescribeAppResponse, Scheduler, Stream
+from torchx.schedulers.api import (
+    AppDryRunInfo,
+    DescribeAppResponse,
+    WorkspaceScheduler,
+    Stream,
+)
 from torchx.schedulers.ids import make_unique
 from torchx.schedulers.streams import Tee
 from torchx.specs.api import (
@@ -503,7 +510,7 @@ def register_termination_signals() -> None:
         signal.signal(signal.SIGINT, _terminate_process_handler)
 
 
-class LocalScheduler(Scheduler):
+class LocalScheduler(WorkspaceScheduler):
     """
     Schedules on localhost. Containers are modeled as processes and
     certain properties of the container that are either not relevant
@@ -516,7 +523,7 @@ class LocalScheduler(Scheduler):
     4. Retry counts (no retries supported)
     5. Deployment preferences
 
-    Scheduler support orphan processes cleanup on receiving SIGTERM or SIGINT.
+    LocalScheduler supports orphan processes cleanup on receiving SIGTERM or SIGINT.
     The scheduler will terminate the spawned processes.
 
     This is exposed via the scheduler `local_cwd`.
@@ -903,6 +910,9 @@ class LocalScheduler(Scheduler):
                 f"Exception {e} occurred while trying to clean `LocalScheduler` via `__del__` method"
             )
 
+    def build_workspace_image(self, img: str, workspace: str) -> str:
+        return _build_tempdir_from_workspace(workspace)
+
 
 class LogIterator:
     def __init__(
@@ -961,6 +971,42 @@ class LogIterator:
                 line = line.rstrip("\n")  # strip the trailing newline
                 if re.match(self._regex, line):
                     return line
+
+
+# _WORKSPACE_IMAGES is a list of temporary directories that have had workspaces
+# placed in them.
+_WORKSPACE_IMAGES: List[object] = []
+
+
+def _build_tempdir_from_workspace(workspace: str) -> str:
+    fs, _, path = workspace.rpartition("://")
+    if fs == "file":
+        workspace = path
+    if os.path.isdir(workspace):
+        return workspace
+
+    root = tempfile.TemporaryDirectory("torchx_workspace")
+    _WORKSPACE_IMAGES.append(root)
+    _copy_to_dir(workspace, root.name)
+    return root.name
+
+
+def _copy_to_dir(workspace: str, root: str) -> None:
+    # TODO(d4l3k) implement docker ignore files
+
+    fs, path = fsspec.core.url_to_fs(workspace)
+    assert isinstance(path, str), "path must be str"
+
+    for dir, dirs, files in fs.walk(path, detail=True):
+        assert isinstance(dir, str), "path must be str"
+        relpath = posixpath.relpath(dir, path)
+        dirpath = os.path.join(root, relpath)
+        for child_dir in dirs:
+            os.mkdir(os.path.join(dirpath, child_dir))
+        for file, info in files.items():
+            local_path = os.path.join(dirpath, file)
+            with fs.open(info["name"], "rb") as src, open(local_path, "wb") as dst:
+                shutil.copyfileobj(src, dst)
 
 
 def create_cwd_scheduler(session_name: str, **kwargs: Any) -> LocalScheduler:
