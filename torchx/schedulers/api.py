@@ -280,6 +280,26 @@ class Scheduler(abc.ABC):
                 )
 
 
+class WorkspaceScheduler(Scheduler):
+    """
+    WorkspaceScheduler is a Scheduler that has workspace support.
+
+    Experimental: this interface may change without notice.
+    """
+
+    @abc.abstractmethod
+    def build_workspace_image(self, img: str, workspace: str) -> str:
+        """
+        build_workspace_image builds a new image with the workspace filesystem
+        overlaid on it and returns the new image name.
+
+        This may be a lazy operation that doesn't actually build the new image
+        until launch time so the workspace filesystem must persist until the job
+        launches.
+        """
+        ...
+
+
 def filter_regex(regex: str, data: Iterable[str]) -> Iterable[str]:
     """
     filter_regex takes a string iterator and returns an iterator that only has
